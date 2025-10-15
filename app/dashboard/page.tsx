@@ -12,6 +12,7 @@ import DoctorUpdate from "@/components/dashboard/doctor-update"
 import HistoryList from "@/components/dashboard/history-list"
 import PermissionsPanel from "@/components/dashboard/permissions"
 import LedgerView from "@/components/dashboard/ledger-view"
+import Profile from "@/components/dashboard/profile"
 import { useMemo, useState, useEffect } from "react"
 import type { User } from "@/lib/types"
 
@@ -28,36 +29,54 @@ export default function Dashboard() {
   const router = useRouter()
   const { toast } = useToast()
   const { data: me } = useSWR<User | null>("me", fetcher)
-  // Fix: Use a consistent key for permissions and correct type
   const { data: perms } = useSWR<any>(me ? ["perms", me.id] : null, listMyPermissions)
   const [selectedPatientId, setSelectedPatientId] = useState<string | null>(null)
 
-  useEffect(() => {
-    // Only redirect if me is explicitly null (not undefined)
-    if (typeof window !== "undefined" && me === null) {
-      router.replace("/")
-    }
-  }, [me, router])
-
-  // Prevent rendering until me is loaded (either a user or null)
-  if (me === undefined) return null
-
+  // Move all data fetching hooks to the top level
   const patients = useMemo(() => {
     if (!me || !perms) return []
-    if (me.role === "patient") return [me]
-    // doctor -> patients who granted access
-    return perms.patients
+    if (me?.role === "patient") return [me]
+    return perms?.patients || []
   }, [me, perms])
-  const activePatientId = selectedPatientId || (patients[0]?.id ?? null)
 
-  const { data: history } = useSWR(activePatientId ? ["history", activePatientId] : null, async () =>
-    getPatientHistory(activePatientId!),
+  const activePatientId = useMemo(
+    () => selectedPatientId || (patients[0]?.id ?? null),
+    [selectedPatientId, patients],
   )
-  const { data: ledger } = useSWR(activePatientId ? ["ledger", activePatientId] : null, async () =>
-    getLedger(activePatientId!),
+
+  const { data: history } = useSWR(
+    activePatientId ? ["history", activePatientId] : null,
+    async () => (activePatientId ? getPatientHistory(activePatientId) : null),
+  )
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      if (me === null) {
+        router.replace("/")
+      } else {
+        // Check for stored user data from signup
+        const storedUserData = localStorage.getItem('medchain-user-data')
+        if (storedUserData) {
+          const userData = JSON.parse(storedUserData)
+          toast({
+            title: 'Welcome to your Dashboard!',
+            description: `Name: ${userData.name}\nEmail: ${userData.email}\nRole: ${userData.role}${userData.walletAddress ? '\nWallet: ' + userData.walletAddress : ''}`,
+            duration: 5000
+          })
+          // Clear the stored data after showing
+          localStorage.removeItem('medchain-user-data')
+        }
+      }
+    }
+  }, [me, router, toast])
+  const { data: ledger } = useSWR(
+    activePatientId ? ["ledger", activePatientId] : null,
+    async () => (activePatientId ? getLedger(activePatientId) : null),
   )
   const verified = useMemo(() => (ledger ? verifyChain(ledger) : null), [ledger])
 
+  // Early return after all hooks
+  if (me === undefined) return null
   if (!me) return null
 
   return (
@@ -72,6 +91,14 @@ export default function Dashboard() {
       />
 
       <div className="mx-auto max-w-6xl p-6 grid gap-6">
+        <div className="grid gap-2">
+          <h1 className="text-3xl font-bold">Welcome, {me.name}!</h1>
+          <p className="text-muted-foreground">
+            {me.role === "patient" 
+              ? "Manage your medical records securely on the blockchain" 
+              : "Access and update your patients' medical records securely"}
+          </p>
+        </div>
         <Card>
           <CardHeader>
             <CardTitle className="text-balance">Dashboard</CardTitle>
@@ -105,6 +132,7 @@ export default function Dashboard() {
                 <TabsTrigger value="records">Records</TabsTrigger>
                 <TabsTrigger value="permissions">Access</TabsTrigger>
                 <TabsTrigger value="ledger">Ledger</TabsTrigger>
+                <TabsTrigger value="profile">Profile</TabsTrigger>
               </TabsList>
 
               <TabsContent value="records" className="pt-4 grid gap-4 md:grid-cols-2">
@@ -170,6 +198,22 @@ export default function Dashboard() {
                   failures={verified?.failures ?? []}
                 />
               </TabsContent>
+
+              {/* Add this new TabsContent for Profile */}
+              <TabsContent value="profile" className="pt-4">
+                <Profile 
+                  user={me!}
+                  onUpdate={(updatedUser) => {
+                    // Refresh user data after update
+                    mutate("me")
+                    toast({
+                      title: "Profile updated",
+                      description: "Your profile has been updated successfully."
+                    })
+                  }}
+                />
+              </TabsContent>
+
             </Tabs>
           </CardContent>
         </Card>

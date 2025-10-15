@@ -1,7 +1,7 @@
 import { sha256HexFromString, hashPassword, randomSaltHex } from "./crypto"
 import {
   getFile,
-  getUserByEmail,
+  getUserByEmail as dbGetUserByEmail,
   getUserById,
   listBlocksByPatient,
   listPermissionsForDoctor,
@@ -20,22 +20,46 @@ import type { Block, Permission, RecordItem, Role, User } from "./types"
 const SESSION_KEY = "medchain-session-user-id"
 
 // Auth
-export async function createAccount(opts: { name: string; email: string; password: string; role: Role }) {
-  const { name, email, password, role } = opts
-  const existing = await getUserByEmail(email)
+export async function createAccount(opts: { 
+  name: string; 
+  email: string; 
+  role: Role;
+  password?: string;
+  walletAddress?: string;
+}) {
+  const { name, email, role, password, walletAddress } = opts
+  const existing = await dbGetUserByEmail(email)
   if (existing) {
     throw new Error("Email already registered")
   }
-  const saltHex = randomSaltHex()
-  const passwordHashHex = await hashPassword(password, saltHex)
+
+  let authData: Pick<User, 'saltHex' | 'passwordHashHex' | 'walletAddress' | 'authMethod'>;
+  
+  if (password) {
+    const saltHex = randomSaltHex()
+    const passwordHashHex = await hashPassword(password, saltHex)
+    authData = {
+      saltHex,
+      passwordHashHex,
+      authMethod: 'password'
+    }
+  } else if (walletAddress) {
+    authData = {
+      walletAddress,
+      authMethod: 'metamask'
+    }
+  } else {
+    throw new Error("Either password or walletAddress must be provided")
+  }
+
   const user: User = {
     id: crypto.randomUUID(),
     name,
     email,
     role,
-    saltHex,
-    passwordHashHex,
     createdAt: Date.now(),
+    ...authData, // Include authentication data
+    ...authData
   }
   await putUser(user)
   localStorage.setItem(SESSION_KEY, user.id)
@@ -51,28 +75,97 @@ export async function createAccount(opts: { name: string; email: string; passwor
   return true
 }
 
-export async function login(email: string, password: string) {
-  const user = await getUserByEmail(email)
-  if (!user) return false
-  const hash = await hashPassword(password, user.saltHex)
-  if (hash !== user.passwordHashHex) return false
-  localStorage.setItem(SESSION_KEY, user.id)
-  return true
+// Export getUserByEmail for external use
+export const getUserByEmail = dbGetUserByEmail;
+
+export async function login(email: string, password?: string, walletAddress?: string) {
+  try {
+    console.log("Login attempt:", { email, hasPassword: !!password, walletAddress });
+    
+    // 1. Get user by email
+    const user = await dbGetUserByEmail(email)
+    console.log("Found user:", user);
+    if (!user) {
+      console.log("No user found with email:", email);
+      return false;
+    }
+
+    // 2. Check authentication method
+    console.log("User auth method:", user.authMethod);
+    
+    if (password && user.authMethod === 'password') {
+      if (!user.saltHex || !user.passwordHashHex) {
+        console.log("Missing salt or hash for password auth");
+        return false;
+      }
+      const hash = await hashPassword(password, user.saltHex)
+      if (hash !== user.passwordHashHex) {
+        console.log("Password hash mismatch");
+        return false;
+      }
+    } else if (walletAddress) {
+      console.log("MetaMask auth check:", {
+        providedAddress: walletAddress.toLowerCase(),
+        storedAddress: user.walletAddress?.toLowerCase(),
+        authMethod: user.authMethod
+      });
+      if (!user.authMethod || user.authMethod !== 'metamask') {
+        console.log("User is not registered with MetaMask");
+        return false;
+      }
+      if (!user.walletAddress) {
+        console.log("No wallet address stored for user");
+        return false;
+      }
+      if (walletAddress.toLowerCase() !== user.walletAddress.toLowerCase()) {
+        console.log("Wallet address mismatch");
+        return false;
+      }
+    } else {
+      console.log("Invalid auth method combination");
+      return false;
+    }
+
+    // 3. Store user data
+    localStorage.setItem(SESSION_KEY, user.id)
+    localStorage.setItem(`${SESSION_KEY}-cache`, JSON.stringify(user))
+    console.log("Login successful, user stored:", user);
+    return true;
+  } catch (error) {
+    console.error("Login error:", error);
+    return false;
+  }
 }
 
 export function getCurrentUser(): User | null {
-  const id = typeof window !== "undefined" ? localStorage.getItem(SESSION_KEY) : null
+  if (typeof window === "undefined") {
+    return null
+  }
+
+  const id = localStorage.getItem(SESSION_KEY)
   if (!id) return null
-  // NOTE: indexedDB APIs are async; we can only return a cached payload synchronously if desired.
-  // For simplicity, we stored only the ID. Pages should fetch details as needed where asynchronous.
-  // Here we return a minimal shape with id; dashboard fetches again via SWR if needed.
-  // However, to keep UI simple, we'll cache the full user in memory when set.
-  // For now, we return a snapshot: id present -> treat as logged-in, but we also need user fields.
-  // We'll approximate by reading from a sync cache if placed. Instead, we try to read from localStorage JSON if available.
+
+  // Try to get cached user data
   const cached = localStorage.getItem(`${SESSION_KEY}-cache`)
-  if (cached) return JSON.parse(cached)
-  // If no cache, we fallback to an object that at least has id; UI may redirect until SWR fills.
-  return { id, name: "", email: "", role: "patient", saltHex: "", passwordHashHex: "", createdAt: 0 } as any
+  if (cached) {
+    try {
+      const user = JSON.parse(cached)
+      return user
+    } catch {
+      // If cache is invalid, remove it
+      localStorage.removeItem(`${SESSION_KEY}-cache`)
+    }
+  }
+
+  // Return minimal user object
+  return {
+    id,
+    name: "",
+    email: "",
+    role: "patient",
+    createdAt: 0,
+    authMethod: "password"
+  } as User
 }
 
 export async function logout() {

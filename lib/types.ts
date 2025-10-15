@@ -5,9 +5,26 @@ export interface User {
   name: string
   email: string
   role: Role
-  saltHex: string
-  passwordHashHex: string
+  saltHex?: string
+  passwordHashHex?: string
+  walletAddress?: string
   createdAt: number
+  authMethod: 'password' | 'metamask'
+  // Basic Info
+  age?: string
+  gender?: string
+  height?: string
+  weight?: string
+  // Vital Signs
+  bloodPressure?: string
+  heartRate?: string
+  temperature?: string
+  respiratoryRate?: string
+  // Body Composition
+  bmi?: string
+  bodyFat?: string
+  muscleMass?: string
+  boneDensity?: string
 }
 
 export type RecordType = "report" | "update"

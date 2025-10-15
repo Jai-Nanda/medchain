@@ -3,6 +3,7 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { ClientDate } from "./ClientDate"
 
 export default function LedgerView({
   blocks,
@@ -50,7 +51,7 @@ export default function LedgerView({
               <li key={b.id} className="p-3 text-sm">
                 <div className="flex items-center justify-between">
                   <div className="font-medium">Block #{b.index}</div>
-                  <div className="text-muted-foreground">{new Date(b.timestamp).toLocaleString()}</div>
+                  <div className="text-muted-foreground"><ClientDate timestamp={b.timestamp} /></div>
                 </div>
                 <div className="mt-1 grid gap-1">
                   <div>
