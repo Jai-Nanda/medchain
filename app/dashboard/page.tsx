@@ -6,7 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useToast } from "@/components/ui/use-toast"
 import TopNav from "@/components/top-nav"
-import { getCurrentUser, logout, listMyPermissions, getPatientHistory, getLedger, verifyChain } from "@/lib/ledger"
+import { getSessionUserHydrated, logout, listMyPermissions, getPatientHistory, getLedger, verifyChain } from "@/lib/ledger"
 import RecordUpload from "@/components/dashboard/record-upload"
 import DoctorUpdate from "@/components/dashboard/doctor-update"
 import HistoryList from "@/components/dashboard/history-list"
@@ -20,7 +20,7 @@ import type { User } from "@/lib/types"
 const fetcher = async (key: string, ...args: any[]) => {
   switch (key) {
     case "me":
-      return getCurrentUser()
+      return getSessionUserHydrated()
     default:
       return null
   }
@@ -45,10 +45,93 @@ export default function Dashboard() {
     [selectedPatientId, patients],
   )
 
+  const activePatient = useMemo(
+    () => (activePatientId ? patients.find((p: any) => p.id === activePatientId) ?? null : null),
+    [patients, activePatientId],
+  )
+
   const { data: history } = useSWR(
     activePatientId ? ["history", activePatientId] : null,
     async () => (activePatientId ? getPatientHistory(activePatientId) : null),
   )
+
+  const prescPatientId = useMemo(
+    () => {
+      if (!me) return null
+      // Patients: use own id. Doctors: use their own id as a stable SWR key.
+      return me.id
+    },
+    [me]
+  )
+
+  const { data: prescriptions } = useSWR(
+    prescPatientId ? ["prescriptions", prescPatientId] : null,
+    async () => {
+      if (typeof window === "undefined" || !prescPatientId || !me) return []
+      let items: any[] = []
+      if (me.role === "patient") {
+        // Patient: load only their own bucket and compatible legacy entries
+        const raw = localStorage.getItem(`prescriptions:${me.id}`)
+        items = raw ? JSON.parse(raw) : []
+        try {
+          for (const k in localStorage) {
+            if (!Object.prototype.hasOwnProperty.call(localStorage, k)) continue
+            if (!k.startsWith('prescriptions:')) continue
+            if (k === `prescriptions:${me.id}`) continue
+            const otherRaw = localStorage.getItem(k)
+            if (!otherRaw) continue
+            const arr = JSON.parse(otherRaw)
+            if (Array.isArray(arr)) {
+              let matched = arr.filter((p: any) => p?.patientId === me.id)
+              matched = matched.concat(arr.filter((p: any) => !p?.patientId && p?.patientName === me.name))
+              if (matched.length) items = [...items, ...matched]
+            }
+          }
+        } catch {}
+      } else {
+        // Doctor: always include their drafts bucket
+        const draftsRaw = localStorage.getItem(`prescriptions:doctor:${me.id}`)
+        items = draftsRaw ? JSON.parse(draftsRaw) : []
+        // If a patient is selected, also include that patient's bucket
+        if (activePatientId) {
+          const pRaw = localStorage.getItem(`prescriptions:${activePatientId}`)
+          const pItems = pRaw ? JSON.parse(pRaw) : []
+          items = [...pItems, ...items]
+        }
+      }
+      return items
+    },
+  )
+
+  const savePrescription = async (prescription: any) => {
+    if (!me) return
+    // If doctor and no patient selected, save to doctor drafts; else save to the patient bucket
+    const isDoctor = me.role === "doctor"
+    const targetPatientId = isDoctor ? (activePatientId || null) : me.id
+    const useDrafts = isDoctor && !targetPatientId
+    const current = prescriptions ?? []
+    const id = typeof crypto !== "undefined" && (crypto as any).randomUUID ? (crypto as any).randomUUID() : String(Date.now())
+    const next = [
+      {
+        id,
+        ...prescription,
+        patientId: targetPatientId ?? undefined,
+        doctorId: me?.id,
+        doctorEmail: me?.email,
+      },
+      ...current,
+    ]
+    if (typeof window !== "undefined") {
+      if (useDrafts) {
+        localStorage.setItem(`prescriptions:doctor:${me.id}`, JSON.stringify(next))
+      } else if (targetPatientId) {
+        localStorage.setItem(`prescriptions:${targetPatientId}`, JSON.stringify(next))
+      }
+    }
+    // Use a stable SWR key so the doctor's view updates regardless of selection
+    mutate(["prescriptions", me.id], next, false)
+    mutate(["prescriptions", me.id])
+  }
 
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -128,7 +211,7 @@ export default function Dashboard() {
               </div>
             )}
 
-            <Tabs defaultValue="records" className="w-full">
+            <Tabs defaultValue="prescription" className="w-full">
               <TabsList className="flex flex-wrap">
                 <TabsTrigger value="records">Records</TabsTrigger>
                 <TabsTrigger value="permissions">Access</TabsTrigger>
@@ -213,6 +296,16 @@ export default function Dashboard() {
                       description: "Your profile has been updated successfully."
                     })
                   }}
+                />
+              </TabsContent>
+
+              <TabsContent value="prescription" className="pt-4">
+                <Prescription
+                  me={me!}
+                  patientName={me.role === "patient" ? me.name : (activePatient?.name ?? "")}
+                  prescriptions={prescriptions ?? []}
+                  onSave={savePrescription}
+                  canCreate={true}
                 />
               </TabsContent>
 
