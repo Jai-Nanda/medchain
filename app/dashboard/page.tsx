@@ -13,6 +13,7 @@ import HistoryList from "@/components/dashboard/history-list"
 import PermissionsPanel from "@/components/dashboard/permissions"
 import LedgerView from "@/components/dashboard/ledger-view"
 import Profile from "@/components/dashboard/profile"
+import Prescription from "@/components/dashboard/prescription"
 import { useMemo, useState, useEffect } from "react"
 import type { User } from "@/lib/types"
 
@@ -133,6 +134,7 @@ export default function Dashboard() {
                 <TabsTrigger value="permissions">Access</TabsTrigger>
                 <TabsTrigger value="ledger">Ledger</TabsTrigger>
                 <TabsTrigger value="profile">Profile</TabsTrigger>
+                <TabsTrigger value="prescription">Prescription</TabsTrigger>
               </TabsList>
 
               <TabsContent value="records" className="pt-4 grid gap-4 md:grid-cols-2">
